@@ -1,22 +1,40 @@
 # Transformer from Scratch with PyTorch
+<img src="https://github.com/user-attachments/assets/f5e88463-9f28-44b9-8dbc-240da904e859" alt="transformer" width="450">
 
 ## Overview
+This project implements an English-to-Portuguese translation system using a Transformer model built from scratch. The model was developed based on the paper "Attention Is All You Need" (Vaswani et al., 2017), which introduced the Transformer architecture for translation and other natural language processing tasks.
 
-This project aims to implement a Transformer model from scratch using PyTorch, inspired by the seminal paper "Attention is All You Need" by Vaswani et al. The Transformer architecture introduced in this paper revolutionized natural language processing and machine translation by relying solely on attention mechanisms, discarding recurrence and convolutions.
+## Project Description
 
-## Project Structure
+The goal of this project is to build a machine translation model that can accurately translate English texts into Portuguese. The model was implemented from scratch without using pre-built Transformer libraries and is trained using the **Helsinki-NLP/opus_books** dataset available on Hugging Face Datasets.
 
-- `model.py`: Contains the implementation of the Transformer model, including the Encoder, Decoder, and the overall Transformer architecture.
-- `utils.py`: Includes utility functions for data processing, tokenization, and training.
-- `train.py`: Script to train the Transformer model on a dataset.
-- `evaluate.py`: Script to evaluate the model's performance on a test set.
-- `data/`: Directory containing datasets for training and evaluation.
-- `notebooks/`: Jupyter notebooks with exploratory data analysis and model training experiments.
-- `requirements.txt`: List of required Python packages for the project.
+## Dataset
 
-## Dependencies
+The dataset used is [Helsinki-NLP/opus_books](https://huggingface.co/datasets/Helsinki-NLP/opus_books/viewer/en-pt), which contains a collection of books translated into English and Portuguese. This dataset is ideal for training translation models as it provides sentence pairs in both languages.
 
-To install the necessary dependencies, run:
+## Model Architecture
+The Transformer model consists of:
+
+- Encoder: Encodes the input sequence into an internal representation.
+- Decoder: Decodes the internal representation to generate the output sequence.
+- Attention Layers: Used to capture relationships between different parts of the input and output.
+  
+Training is performed using cross-entropy loss, and the model is optimized with the Adam optimizer.
+
+## Usage
+
+1. Train the Model
+Run the train.py script to train the model:
 
 ```bash
-pip install -r requirements.txt
+python .\train\train.py
+```
+The script will load the dataset, train the Transformer model, and save the model weights after each epoch.
+
+2. Translate Text
+After training, you can use the translate.py script to translate English text into Portuguese:
+
+```bash
+python translate.py "Your English text here"
+```
+If you do not provide text, the script will use a default example.
