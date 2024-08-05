@@ -1,6 +1,6 @@
-from transformer import build_transformer
-from dataset import BilingualDataset, causal_mask
-from config import get_config, get_weights_file_path, latest_weights_file_path
+from transformer.transformer import build_transformer
+from train.dataset import BilingualDataset, causal_mask
+from utils.utils import get_config, get_weights_file_path, latest_weights_file_path
 
 import torchtext.datasets as datasets # type: ignore
 import torch
@@ -24,24 +24,39 @@ import torchmetrics  # type: ignore
 from torch.utils.tensorboard import SummaryWriter
 
 def greedy_decode(model, source, source_mask, tokenizer_src, tokenizer_tgt, max_len, device):
+    """
+    Performs greedy decoding to generate a sequence from the model.
+
+    Args:
+        model: The transformer model.
+        source (Tensor): The source input tensor.
+        source_mask (Tensor): The source mask tensor.
+        tokenizer_src: Tokenizer for the source language.
+        tokenizer_tgt: Tokenizer for the target language.
+        max_len (int): Maximum length of the output sequence.
+        device (torch.device): Device to perform computations on.
+
+    Returns:
+        Tensor: The generated sequence.
+    """
     sos_idx = tokenizer_tgt.token_to_id('[SOS]')
     eos_idx = tokenizer_tgt.token_to_id('[EOS]')
 
-    # Precompute the encoder output and reuse it for every step
+    # Compute encoder output and reuse it for decoding
     encoder_output = model.encode(source, source_mask)
-    # Initialize the decoder input with the sos token
+    # Initialize decoder input with <sos> token
     decoder_input = torch.empty(1, 1).fill_(sos_idx).type_as(source).to(device)
     while True:
         if decoder_input.size(1) == max_len:
             break
 
-        # build mask for target
+        # Build mask for target
         decoder_mask = causal_mask(decoder_input.size(1)).type_as(source_mask).to(device)
 
-        # calculate output
+        # Compute decoder output
         out = model.decode(encoder_output, source_mask, decoder_input, decoder_mask)
 
-        # get next token
+        # Get the next token
         prob = model.project(out[:, -1])
         _, next_word = torch.max(prob, dim=1)
         decoder_input = torch.cat(
@@ -55,6 +70,21 @@ def greedy_decode(model, source, source_mask, tokenizer_src, tokenizer_tgt, max_
 
 
 def run_validation(model, validation_ds, tokenizer_src, tokenizer_tgt, max_len, device, print_msg, global_step, writer, num_examples=2):
+    """
+    Run validation to evaluate model performance on a validation dataset.
+
+    Args:
+        model: The transformer model.
+        validation_ds (DataLoader): The DataLoader for the validation dataset.
+        tokenizer_src: Tokenizer for the source language.
+        tokenizer_tgt: Tokenizer for the target language.
+        max_len (int): Maximum length of the output sequence.
+        device (torch.device): Device to perform computations on.
+        print_msg: Function to print messages.
+        global_step (int): The global step for logging.
+        writer: TensorBoard SummaryWriter.
+        num_examples (int): Number of examples to print.
+    """
     model.eval()
     count = 0
 
@@ -63,12 +93,12 @@ def run_validation(model, validation_ds, tokenizer_src, tokenizer_tgt, max_len, 
     predicted = []
 
     try:
-        # get the console window width
+        # Get the console window width
         with os.popen('stty size', 'r') as console:
             _, console_width = console.read().split()
             console_width = int(console_width)
     except:
-        # If we can't get the console width, use 80 as default
+        # Default to 80 if console width cannot be determined
         console_width = 80
 
     with torch.no_grad():
@@ -77,10 +107,10 @@ def run_validation(model, validation_ds, tokenizer_src, tokenizer_tgt, max_len, 
             encoder_input = batch["encoder_input"].to(device) # (b, seq_len)
             encoder_mask = batch["encoder_mask"].to(device) # (b, 1, 1, seq_len)
 
-            # check that the batch size is 1
-            assert encoder_input.size(
-                0) == 1, "Batch size must be 1 for validation"
+            # Ensure batch size is 1 for validation
+            assert encoder_input.size(0) == 1, "Batch size must be 1 for validation"
 
+            # Decode and generate output
             model_out = greedy_decode(model, encoder_input, encoder_mask, tokenizer_src, tokenizer_tgt, max_len, device)
 
             source_text = batch["src_text"][0]
@@ -91,7 +121,7 @@ def run_validation(model, validation_ds, tokenizer_src, tokenizer_tgt, max_len, 
             expected.append(target_text)
             predicted.append(model_out_text)
             
-            # Print the source, target and model output
+            # Print results
             print_msg('-'*console_width)
             print_msg(f"{f'SOURCE: ':>12}{source_text}")
             print_msg(f"{f'TARGET: ':>12}{target_text}")
@@ -102,33 +132,51 @@ def run_validation(model, validation_ds, tokenizer_src, tokenizer_tgt, max_len, 
                 break
     
     if writer:
-        # Evaluate the character error rate
-        # Compute the char error rate 
+        # Compute and log evaluation metrics
         metric = torchmetrics.CharErrorRate()
         cer = metric(predicted, expected)
         writer.add_scalar('validation cer', cer, global_step)
         writer.flush()
 
-        # Compute the word error rate
         metric = torchmetrics.WordErrorRate()
         wer = metric(predicted, expected)
         writer.add_scalar('validation wer', wer, global_step)
         writer.flush()
 
-        # Compute the BLEU metric
         metric = torchmetrics.BLEUScore()
         bleu = metric(predicted, expected)
         writer.add_scalar('validation BLEU', bleu, global_step)
         writer.flush()
 
 def get_all_sentences(ds, lang):
+    """
+    Generator to yield all sentences in a specific language from the dataset.
+
+    Args:
+        ds (Dataset): The dataset.
+        lang (str): Language code.
+
+    Yields:
+        str: Translated sentence in the specified language.
+    """
     for item in ds:
         yield item['translation'][lang]
 
 def get_or_build_tokenizer(config, ds, lang):
+    """
+    Load or build a tokenizer based on configuration and dataset.
+
+    Args:
+        config (dict): Configuration dictionary.
+        ds (Dataset): The dataset.
+        lang (str): Language code.
+
+    Returns:
+        Tokenizer: The tokenizer for the specified language.
+    """
     tokenizer_path = Path(config['tokenizer_file'].format(lang))
     if not Path.exists(tokenizer_path):
-        # Most code taken from: https://huggingface.co/docs/tokenizers/quicktour
+        # Create a new tokenizer
         tokenizer = Tokenizer(WordLevel(unk_token="[UNK]"))
         tokenizer.pre_tokenizer = Whitespace()
         trainer = WordLevelTrainer(special_tokens=["[UNK]", "[PAD]", "[SOS]", "[EOS]"], min_frequency=2)
@@ -139,14 +187,23 @@ def get_or_build_tokenizer(config, ds, lang):
     return tokenizer
 
 def get_ds(config):
-    # It only has the train split, so we divide it overselves
+    """
+    Prepare the training and validation datasets.
+
+    Args:
+        config (dict): Configuration dictionary.
+
+    Returns:
+        tuple: (train_dataloader, val_dataloader, tokenizer_src, tokenizer_tgt)
+    """
+    # Load raw dataset
     ds_raw = load_dataset(f"{config['datasource']}", f"{config['lang_src']}-{config['lang_tgt']}", split='train')
 
-    # Build tokenizers
+    # Build tokenizers for source and target languages
     tokenizer_src = get_or_build_tokenizer(config, ds_raw, config['lang_src'])
     tokenizer_tgt = get_or_build_tokenizer(config, ds_raw, config['lang_tgt'])
 
-    # Keep 90% for training, 10% for validation
+    # Split dataset into training and validation sets
     train_ds_size = int(0.9 * len(ds_raw))
     val_ds_size = len(ds_raw) - train_ds_size
     train_ds_raw, val_ds_raw = random_split(ds_raw, [train_ds_size, val_ds_size])
@@ -154,7 +211,7 @@ def get_ds(config):
     train_ds = BilingualDataset(train_ds_raw, tokenizer_src, tokenizer_tgt, config['lang_src'], config['lang_tgt'], config['seq_len'])
     val_ds = BilingualDataset(val_ds_raw, tokenizer_src, tokenizer_tgt, config['lang_src'], config['lang_tgt'], config['seq_len'])
 
-    # Find the maximum length of each sentence in the source and target sentence
+    # Compute maximum sentence length in source and target languages
     max_len_src = 0
     max_len_tgt = 0
 
@@ -167,18 +224,35 @@ def get_ds(config):
     print(f'Max length of source sentence: {max_len_src}')
     print(f'Max length of target sentence: {max_len_tgt}')
     
-
+    # Create DataLoaders for training and validation
     train_dataloader = DataLoader(train_ds, batch_size=config['batch_size'], shuffle=True)
     val_dataloader = DataLoader(val_ds, batch_size=1, shuffle=True)
 
     return train_dataloader, val_dataloader, tokenizer_src, tokenizer_tgt
 
 def get_model(config, vocab_src_len, vocab_tgt_len):
+    """
+    Build and initialize the transformer model.
+
+    Args:
+        config (dict): Configuration dictionary.
+        vocab_src_len (int): Vocabulary size of the source language.
+        vocab_tgt_len (int): Vocabulary size of the target language.
+
+    Returns:
+        nn.Module: The transformer model.
+    """
     model = build_transformer(vocab_src_len, vocab_tgt_len, config["seq_len"], config['seq_len'], d_model=config['d_model'])
     return model
 
 def train_model(config):
-    # Define the device
+    """
+    Train the transformer model.
+
+    Args:
+        config (dict): Configuration dictionary.
+    """
+    # Define the device for training
     device = "cuda" if torch.cuda.is_available() else "mps" if torch.has_mps or torch.backends.mps.is_available() else "cpu"
     print("Using device:", device)
     if (device == 'cuda'):
@@ -192,17 +266,17 @@ def train_model(config):
         print("      On a Mac machine, run: pip3 install --pre torch torchvision torchaudio torchtext --index-url https://download.pytorch.org/whl/nightly/cpu")
     device = torch.device(device)
 
-    # Make sure the weights folder exists
+    # Ensure the weights folder exists
     Path(f"{config['datasource']}_{config['model_folder']}").mkdir(parents=True, exist_ok=True)
 
     train_dataloader, val_dataloader, tokenizer_src, tokenizer_tgt = get_ds(config)
     model = get_model(config, tokenizer_src.get_vocab_size(), tokenizer_tgt.get_vocab_size()).to(device)
-    # Tensorboard
+    # Tensorboard writer for logging
     writer = SummaryWriter(config['experiment_name'])
 
     optimizer = torch.optim.Adam(model.parameters(), lr=config['lr'], eps=1e-9)
 
-    # If the user specified a model to preload before training, load it
+    # Load pre-trained model if specified
     initial_epoch = 0
     global_step = 0
     preload = config['preload']
@@ -217,6 +291,7 @@ def train_model(config):
     else:
         print('No model to preload, starting from scratch')
 
+    # Define loss function
     loss_fn = nn.CrossEntropyLoss(ignore_index=tokenizer_src.token_to_id('[PAD]'), label_smoothing=0.1).to(device)
 
     for epoch in range(initial_epoch, config['num_epochs']):
@@ -230,15 +305,13 @@ def train_model(config):
             encoder_mask = batch['encoder_mask'].to(device) # (B, 1, 1, seq_len)
             decoder_mask = batch['decoder_mask'].to(device) # (B, 1, seq_len, seq_len)
 
-            # Run the tensors through the encoder, decoder and the projection layer
+            # Forward pass through the model
             encoder_output = model.encode(encoder_input, encoder_mask) # (B, seq_len, d_model)
             decoder_output = model.decode(encoder_output, encoder_mask, decoder_input, decoder_mask) # (B, seq_len, d_model)
             proj_output = model.project(decoder_output) # (B, seq_len, vocab_size)
 
-            # Compare the output with the label
+            # Compute loss
             label = batch['label'].to(device) # (B, seq_len)
-
-            # Compute the loss using a simple cross entropy
             loss = loss_fn(proj_output.view(-1, tokenizer_tgt.get_vocab_size()), label.view(-1))
             batch_iterator.set_postfix({"loss": f"{loss.item():6.3f}"})
 
@@ -246,10 +319,8 @@ def train_model(config):
             writer.add_scalar('train loss', loss.item(), global_step)
             writer.flush()
 
-            # Backpropagate the loss
+            # Backpropagate and update weights
             loss.backward()
-
-            # Update the weights
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
 
@@ -258,7 +329,7 @@ def train_model(config):
         # Run validation at the end of every epoch
         run_validation(model, val_dataloader, tokenizer_src, tokenizer_tgt, config['seq_len'], device, lambda msg: batch_iterator.write(msg), global_step, writer)
 
-        # Save the model at the end of every epoch
+        # Save model checkpoint
         model_filename = get_weights_file_path(config, f"{epoch:02d}")
         torch.save({
             'epoch': epoch,
